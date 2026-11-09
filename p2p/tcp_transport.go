@@ -14,6 +14,9 @@ type TCPPeer struct {
 	// If we dial and retrieve a conn => outbound == true
 	// If we accept and retrieve a conn => outbound == false
 	outbound bool
+
+	// Identity of the remote node.
+	id string
 }
 
 // constructor function for peer
