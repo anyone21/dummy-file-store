@@ -9,14 +9,17 @@ import (
 // TCPPeer represents the remote node over a TCP extablished connection
 type TCPPeer struct {
 	// conn is underlying connection of the peer
-	conn net.Conn
+	conn net.Conn // Analogy:  how we communicate
 
 	// If we dial and retrieve a conn => outbound == true
 	// If we accept and retrieve a conn => outbound == false
-	outbound bool
+	// true  -> we called net.Dial()
+	// false -> we called listener.Accept()
+	outbound bool // Analogy: who initiated connection
 
-	// Identity of the remote node.
-	id string
+	// id is the identity of the remote node discovered
+	// during the handshake.
+	id string // Analogy: who is on the other side
 }
 
 // constructor function for peer
@@ -30,6 +33,10 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 type TCPTransport struct {
 	listenAddress string
 	listener      net.Listener
+
+	// id identifies this node.
+	// local node ID should belong to the TCPTransport, not the peer.
+	id string
 
 	mu    sync.RWMutex // In golang this mutex protects the below peer
 	peers map[net.Addr]Peer
@@ -54,9 +61,10 @@ go
 transport := p2p.NewTCPTransport(":3000")
 */
 
-func NewTCPTransport(listenAddr string) *TCPTransport {
+func NewTCPTransport(listenAddr string, id string) *TCPTransport {
 	return &TCPTransport{
 		listenAddress: listenAddr,
+		id:            id,
 		peers:         make(map[net.Addr]Peer),
 	}
 }
@@ -91,4 +99,81 @@ func (t *TCPTransport) startAcceptLoop() {
 
 func (t *TCPTransport) handleConnection(conn net.Conn) {
 	fmt.Printf("New incoming connection from: %s\n", conn.RemoteAddr())
+
+	// this connection was accepted by us,
+	// therefore it is a inbound connection
+	peer := NewTCPPeer(conn, false)
+
+	// perform the handshake
+	if err := peer.Handshake(t.id); err != nil {
+		fmt.Printf("Handshake failed: %s\n", err)
+		conn.Close()
+		return
+	}
+
+	fmt.Printf("Handshake completed with peer: %s\n", peer.id)
+}
+
+// Determine whether the connection is inbound or outbound.
+// Send or receive the handshake accordingly.
+// Decode the remote node's identity.
+// Store that identity in p.id
+func (p *TCPPeer) Handshake(localNodeID string) error {
+	// If we created the TCP connection, we send
+	// we send our identity first.
+	if p.outbound {
+		if err := p.sendHandshake(localNodeID); err != nil {
+			return err
+		}
+		// Now wait for the remote node's identity
+		if err := p.receiveHandshake(); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	// If the remote node created the connection,
+	// we wait for its handshake first.
+	if err := p.receiveHandshake(); err != nil {
+		return err
+	}
+	if err := p.sendHandshake(localNodeID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *TCPPeer) sendHandshake(localNodeID string) error {
+	handshake := Handshake{
+		NodeID: localNodeID,
+	}
+
+	data, err := handshake.Encode()
+	if err != nil {
+		return err
+	}
+
+	_, err = p.conn.Write(data)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+func (p *TCPPeer) receiveHandshake() error {
+	handshake, err := DecodeHandshake(p.conn)
+	if err != nil {
+		return err
+	}
+
+	// store the identity of the remote node
+	p.id = handshake.NodeID
+
+	return nil
+}
+
+func (p *TCPPeer) ID() string {
+	return p.id
 }
